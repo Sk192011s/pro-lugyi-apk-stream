@@ -1,4 +1,4 @@
-// main.ts (Final Filename Fix Version)
+// main.ts (Corrected Auto-fill Logic Version)
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 // --- SECTION 1: DATABASE & CORE LOGIC ---
@@ -199,8 +199,7 @@ function serveHtmlResponse(title: string, bodyContent: string, status: number = 
 // --- SECTION 3: CORE HANDLERS ---
 
 /**
- * (MODIFIED) Download Handler
- * Switched to a more compatible Content-Disposition header format.
+ * Download Handler (Corrected Header)
  */
 async function downloadVideoHandler(req: Request, id: string, key: string): Promise<Response> {
   const record = await kv.get(["links", id]);
@@ -221,9 +220,6 @@ async function downloadVideoHandler(req: Request, id: string, key: string): Prom
   
   const responseHeaders = new Headers();
   
-  // (THE FIX - More Robust Version)
-  // This format provides a simple ASCII fallback AND the full UTF-8 name,
-  // making it compatible with all browsers.
   const fallbackFilename = filename.replace(/[^a-zA-Z0-9.\-_ ]/g, '_');
   const encodedFilename = encodeURIComponent(filename);
   responseHeaders.set(
@@ -325,7 +321,8 @@ async function generateLinkHandler(req: Request): Promise<Response> {
 }
 
 /**
- * Homepage Handler (Unchanged)
+ * (MODIFIED) Homepage Handler
+ * The JavaScript logic is now changed.
  */
 function homepageHandler(): Response {
   const bodyContent = `
@@ -335,8 +332,8 @@ function homepageHandler(): Response {
       <label for="url">Video URL:</label>
       <input type="url" id="url" name="url" placeholder="https://example.com/.../video.mp4" required>
       
-      <label for="filename">Desired Filename (Auto-filled):</label>
-      <input type="text" id="filename" name="filename" placeholder="my_movie.mp4" required>
+      <label for="filename">Desired Filename (e.g., DASS-808.mp4):</label>
+      <input type="text" id="filename" name="filename" placeholder="You must type the filename here" required>
 
       <label for="custom_id">Custom Link Name (Auto-filled):</label>
       <input type="text" id="custom_id" name="custom_id" placeholder="my-movie-2023" required>
@@ -352,30 +349,33 @@ function homepageHandler(): Response {
     </div>
 
     <script>
-      const urlInput = document.getElementById('url');
+      // Auto-fills "Custom Link Name" based on "Desired Filename"
       const filenameInput = document.getElementById('filename');
       const customIdInput = document.getElementById('custom_id');
 
-      urlInput.addEventListener('input', (e) => {
-        const url = e.target.value;
-        if (!url) return;
+      filenameInput.addEventListener('input', (e) => {
+        const filename = e.target.value;
+        if (!filename) {
+          customIdInput.value = '';
+          return;
+        }
         try {
-          let filename = url.substring(url.lastIndexOf('/') + 1).split('?')[0];
-          if (!filename) return;
-          filenameInput.value = filename;
-
           let slug = filename
             .toLowerCase()
-            .replace(/\.(mp4|mkv|txt|avi)$/i, '')
-            .replace(/[^a-z0-9\s-]/g, ' ')
+            .replace(/\.(mp4|mkv|txt|avi)$/i, '') // Remove common extensions
+            .replace(/[^a-z0-9\s-]/g, ' ')      // Remove symbols
             .trim()
-            .replace(/\s+/g, '-');
+            .replace(/\s+/g, '-');             // Replace spaces with dashes
+          
           customIdInput.value = slug;
+
         } catch (err) {
-          console.warn('Could not parse URL:', err);
+          console.warn('Could not parse filename:', err);
         }
       });
     </script>
+  </body>
+  </html>
   `;
   return serveHtmlResponse("Link Generator", bodyContent);
 }
@@ -486,5 +486,5 @@ serve(async (req) => {
     return await downloadVideoHandler(req, id, key);
   }
 
-  return new Response("404 Not Found", { status: 444 }); // Changed 404 to 444 for testing
+  return new Response("404 Not Found", { status: 404 });
 });
