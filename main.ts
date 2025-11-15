@@ -1,4 +1,4 @@
-// main.ts (Corrected Auto-fill Logic Version)
+// main.ts (Auto-detect Extension Version)
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 // --- SECTION 1: DATABASE & CORE LOGIC ---
@@ -14,6 +14,23 @@ function checkAdminAuth(key: string | null): boolean {
   return key === ADMIN_PASSWORD;
 }
 
+/**
+ * (NEW) Helper function to guess extension from Content-Type
+ */
+function mapContentTypeToExtension(contentType: string | null): string {
+  if (!contentType) return ".mp4"; // Default
+  const type = contentType.split(';')[0].trim();
+  switch (type) {
+    case "video/mp4": return ".mp4";
+    case "video/x-matroska": return ".mkv";
+    case "video/webm": return ".webm";
+    case "video/quicktime": return ".mov";
+    case "application/octet-stream": return ".bin"; // Generic binary
+    // Add more types if needed
+    default: return ".mp4"; // Default to mp4 for most unknown video types
+  }
+}
+
 // --- SECTION 2: STYLING (CSS) ---
 
 const CSS = `
@@ -25,11 +42,11 @@ const CSS = `
     --text-primary: #e0e0e0;
     --text-secondary: #b3b3b3;
     --border-color: #333;
-    --accent-color: #0d6efd; /* Modern Blue */
-    --danger-color: #dc3545; /* Red */
+    --accent-color: #0d6efd;
+    --danger-color: #dc3545;
   }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background-color: var(--bg-primary);
     color: var(--text-primary);
     margin: 0;
@@ -50,23 +67,10 @@ const CSS = `
     margin-bottom: 1.5rem;
     text-align: center;
   }
-  a {
-    color: var(--accent-color);
-    text-decoration: none;
-  }
-  a:hover {
-    text-decoration: underline;
-  }
-  form {
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-  }
-  label {
-    font-weight: 500;
-    color: var(--text-secondary);
-    margin-bottom: -8px;
-  }
+  a { color: var(--accent-color); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  form { display: flex; flex-direction: column; gap: 1.25rem; }
+  label { font-weight: 500; color: var(--text-secondary); margin-bottom: -8px; }
   input[type="url"],
   input[type="text"],
   input[type="password"] {
@@ -76,99 +80,40 @@ const CSS = `
     border: 1px solid var(--border-color);
     border-radius: 8px;
     color: var(--text-primary);
-    transition: all 0.2s ease;
   }
   input:focus {
     outline: none;
     border-color: var(--accent-color);
     box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
   }
-  button, .button {
+  button[type="submit"] {
     font-size: 16px;
     font-weight: 600;
     padding: 12px 15px;
     cursor: pointer;
     border: none;
     border-radius: 8px;
-    transition: all 0.2s ease;
-  }
-  button[type="submit"] {
     background-color: var(--accent-color);
     color: white;
   }
-  button[type="submit"]:hover {
-    opacity: 0.85;
-  }
-  .nav {
-    margin-top: 2rem;
-    text-align: center;
-  }
-  .nav a {
-    padding: 8px 12px;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 1.5rem;
-  }
-  th, td {
-    padding: 12px 15px;
-    border-bottom: 1px solid var(--border-color);
-    text-align: left;
-    word-break: break-all;
-  }
-  th {
-    background-color: var(--bg-tertiary);
-    color: #ffffff;
-  }
-  tbody tr:hover {
-    background-color: var(--bg-tertiary);
-  }
-  button.delete, .button.delete {
-    background-color: var(--danger-color);
-    color: white;
-  }
-  .result-box {
-    background: var(--bg-primary);
-    padding: 1.5rem;
-    border-radius: 8px;
-    border: 1px solid var(--border-color);
-  }
-  .result-box h3 {
-    margin-top: 0;
-  }
-  .result-box a {
-    font-size: 1.1rem;
-    font-weight: 600;
-    word-break: break-all;
-  }
-  .result-box.error {
-    border-color: var(--danger-color);
-  }
-  .result-box.error h3 {
-    color: var(--danger-color);
-  }
-  .login-form {
-    text-align: center;
-    padding: 2rem 0;
-  }
-  .login-form input {
-    width: 80%;
-    margin: 0 auto 1.25rem auto;
-    text-align: center;
-  }
-  .button-group {
-    display: flex;
-    gap: 10px;
-    margin-top: 1rem;
-  }
-  .button.secondary {
-    background-color: var(--bg-tertiary);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-  }
-  .button.secondary:hover {
-    background-color: #333;
+  .nav { margin-top: 2rem; text-align: center; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1.5rem; }
+  th, td { padding: 12px 15px; border-bottom: 1px solid var(--border-color); text-align: left; word-break: break-all; }
+  th { background-color: var(--bg-tertiary); color: #ffffff; }
+  tbody tr:hover { background-color: var(--bg-tertiary); }
+  button.delete { background-color: var(--danger-color); color: white; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
+  .result-box { background: var(--bg-primary); padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border-color); }
+  .result-box h3 { margin-top: 0; }
+  .result-box a { font-size: 1.1rem; font-weight: 600; word-break: break-all; }
+  .result-box.error { border-color: var(--danger-color); }
+  .login-form { text-align: center; padding: 2rem 0; }
+  .login-form input { width: 80%; margin: 0 auto 1.25rem auto; text-align: center; }
+  .button-group { display: flex; gap: 10px; margin-top: 1rem; }
+  .button.secondary { background-color: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); }
+  /* (NEW) Optional field description */
+  small {
+    color: var(--text-secondary);
+    margin-top: -10px;
   }
 </style>
 `;
@@ -199,7 +144,7 @@ function serveHtmlResponse(title: string, bodyContent: string, status: number = 
 // --- SECTION 3: CORE HANDLERS ---
 
 /**
- * Download Handler (Corrected Header)
+ * Download Handler (Unchanged)
  */
 async function downloadVideoHandler(req: Request, id: string, key: string): Promise<Response> {
   const record = await kv.get(["links", id]);
@@ -219,14 +164,12 @@ async function downloadVideoHandler(req: Request, id: string, key: string): Prom
   }
   
   const responseHeaders = new Headers();
-  
   const fallbackFilename = filename.replace(/[^a-zA-Z0-9.\-_ ]/g, '_');
   const encodedFilename = encodeURIComponent(filename);
   responseHeaders.set(
     "Content-Disposition", 
     `attachment; filename="${fallbackFilename}"; filename*=UTF-8''${encodedFilename}`
   );
-  
   responseHeaders.set("Content-Type", "application/octet-stream");
   const contentLength = upstreamResponse.headers.get("Content-Length");
   if (contentLength) {
@@ -239,25 +182,29 @@ async function downloadVideoHandler(req: Request, id: string, key: string): Prom
 }
 
 /**
- * Generate Link Handler (Unchanged)
+ * (MODIFIED) Generate Link Handler
+ * Auto-detects filename if left blank.
  */
 async function generateLinkHandler(req: Request): Promise<Response> {
   const formData = await req.formData();
   const url = formData.get("url") as string;
   const key = formData.get("key") as string;
-  const filename = formData.get("filename") as string;
   const custom_id = formData.get("custom_id") as string;
+  let filename_override = (formData.get("filename") as string)?.trim(); // Optional
 
+  // 1. Clean the custom_id (slug)
   const slug = custom_id.trim()
                        .toLowerCase()
-                       .replace(/[^a-z0-9\s-]/g, '')
-                       .replace(/\s+/g, '-');
+                       .replace(/[^a-z0-9\s-]/g, '-')
+                       .replace(/\s+/g, '-')
+                       .replace(/-+/g, '-')
+                       .replace(/^-+|-+$/g, '');
 
-  if (!url || !key || !filename || !slug) {
+  if (!url || !key || !slug) {
     const bodyContent = `
       <div class="result-box error">
         <h3>Error</h3>
-        <p>Invalid URL, Key, Filename, or Custom Link Name provided.</p>
+        <p>Invalid URL, Key, or Custom Link Name provided.</p>
         <hr>
         <a href="/">Go Back</a>
       </div>
@@ -265,6 +212,7 @@ async function generateLinkHandler(req: Request): Promise<Response> {
     return serveHtmlResponse("Error", bodyContent, 400);
   }
 
+  // 2. Check if slug is already taken
   const existing = await kv.get(["links", slug]);
   if (existing.value) {
     const bodyContent = `
@@ -278,15 +226,43 @@ async function generateLinkHandler(req: Request): Promise<Response> {
     `;
     return serveHtmlResponse("Link Name Taken", bodyContent, 409);
   }
+  
+  // 3. Determine the final filename
+  let finalFilename = "";
+  if (filename_override) {
+    // User provided a specific name. Use it.
+    finalFilename = filename_override;
+  } else {
+    // User left it blank. Auto-detect from .txt link.
+    try {
+      console.log("Auto-detecting filename for:", url);
+      // Use HEAD request to only get headers, not the full file
+      const response = await fetch(url, { method: "HEAD" });
+      const contentType = response.headers.get("Content-Type");
+      const extension = mapContentTypeToExtension(contentType);
+      finalFilename = `${slug}${extension}`; // e.g., "dass-808.mp4"
+      console.log(`Detected Content-Type: ${contentType}, Assigned Filename: ${finalFilename}`);
+    } catch (e) {
+      console.error("HEAD request failed:", e.message);
+      // Fallback: If HEAD fails (e.g., server doesn't allow it), just default to .mp4
+      finalFilename = `${slug}.mp4`;
+    }
+  }
 
-  await kv.set(["links", slug], { url: url, key: key, filename: filename });
+  // 4. Save to KV
+  await kv.set(["links", slug], { 
+    url: url, 
+    key: key,
+    filename: finalFilename // The final correct filename
+  });
+
   const newLink = `${new URL(req.url).origin}/download/${slug}?key=${key}`;
   
   const bodyContent = `
     <div class="result-box">
       <h3>Your new download link is ready:</h3>
       <a href="${newLink}" target="_blank" id="generatedLink">${newLink}</a>
-      <p>(Clicking this link will start the download)</p>
+      <p>(Will download as: <strong>${finalFilename}</strong>)</p>
       
       <div class="button-group">
         <button id="copyBtn" class="button secondary">Copy Link</button>
@@ -299,20 +275,13 @@ async function generateLinkHandler(req: Request): Promise<Response> {
     <script>
       const copyBtn = document.getElementById('copyBtn');
       const generatedLink = document.getElementById('generatedLink');
-      
-      if (copyBtn && generatedLink) {
+      if (copyBtn) {
         copyBtn.addEventListener('click', () => {
           navigator.clipboard.writeText(generatedLink.href).then(() => {
             copyBtn.innerText = 'Copied!';
             copyBtn.disabled = true;
-            setTimeout(() => {
-              copyBtn.innerText = 'Copy Link';
-              copyBtn.disabled = false;
-            }, 2000);
-          }).catch(err => {
-            console.error('Failed to copy link: ', err);
-            copyBtn.innerText = 'Copy Failed';
-          });
+            setTimeout(() => { copyBtn.innerText = 'Copy Link'; copyBtn.disabled = false; }, 2000);
+          }).catch(err => { copyBtn.innerText = 'Copy Failed'; });
         });
       }
     </script>
@@ -322,7 +291,7 @@ async function generateLinkHandler(req: Request): Promise<Response> {
 
 /**
  * (MODIFIED) Homepage Handler
- * The JavaScript logic is now changed.
+ * "Filename" is now optional.
  */
 function homepageHandler(): Response {
   const bodyContent = `
@@ -330,13 +299,14 @@ function homepageHandler(): Response {
     
     <form action="/generate" method="POST">
       <label for="url">Video URL:</label>
-      <input type="url" id="url" name="url" placeholder="https://example.com/.../video.mp4" required>
+      <input type="url" id="url" name="url" placeholder="https://example.com/.../video.txt" required>
       
-      <label for="filename">Desired Filename (e.g., DASS-808.mp4):</label>
-      <input type="text" id="filename" name="filename" placeholder="You must type the filename here" required>
+      <label for="custom_id">Custom Link Name (ID):</label>
+      <input type="text" id="custom_id" name="custom_id" placeholder="dass-808 (This appears in the URL)" required>
 
-      <label for="custom_id">Custom Link Name (Auto-filled):</label>
-      <input type="text" id="custom_id" name="custom_id" placeholder="my-movie-2023" required>
+      <label for="filename">Desired Filename (Optional):</label>
+      <input type="text" id="filename" name="filename" placeholder="dass-808-full-movie.mp4">
+      <small>Leave this blank to auto-detect format (e.g., for .txt links).</small>
 
       <label for="key">Secret Key (Password for this link):</label>
       <input type="password" id="key" name="key" placeholder="e.g., mySecret123" required>
@@ -347,35 +317,6 @@ function homepageHandler(): Response {
     <div class="nav">
       <a href="/admin">Admin Panel (Manage Links)</a>
     </div>
-
-    <script>
-      // Auto-fills "Custom Link Name" based on "Desired Filename"
-      const filenameInput = document.getElementById('filename');
-      const customIdInput = document.getElementById('custom_id');
-
-      filenameInput.addEventListener('input', (e) => {
-        const filename = e.target.value;
-        if (!filename) {
-          customIdInput.value = '';
-          return;
-        }
-        try {
-          let slug = filename
-            .toLowerCase()
-            .replace(/\.(mp4|mkv|txt|avi)$/i, '') // Remove common extensions
-            .replace(/[^a-z0-9\s-]/g, ' ')      // Remove symbols
-            .trim()
-            .replace(/\s+/g, '-');             // Replace spaces with dashes
-          
-          customIdInput.value = slug;
-
-        } catch (err) {
-          console.warn('Could not parse filename:', err);
-        }
-      });
-    </script>
-  </body>
-  </html>
   `;
   return serveHtmlResponse("Link Generator", bodyContent);
 }
