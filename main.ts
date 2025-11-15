@@ -1,4 +1,4 @@
-// main.ts (Modern Dark UI Version)
+// main.ts (Filename Fix + Copy Button Version)
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 // --- SECTION 1: DATABASE & CORE LOGIC ---
@@ -163,11 +163,25 @@ const CSS = `
     margin: 0 auto 1.25rem auto;
     text-align: center;
   }
+  /* (NEW) Button Group for Copy */
+  .button-group {
+    display: flex;
+    gap: 10px;
+    margin-top: 1rem;
+  }
+  .button.secondary {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+  }
+  .button.secondary:hover {
+    background-color: #333;
+  }
 </style>
 `;
 
 /**
- * (NEW) Helper function to wrap content in the standard HTML shell
+ * Helper function to wrap content in the standard HTML shell
  */
 function serveHtmlResponse(title: string, bodyContent: string, status: number = 200): Response {
   const html = `
@@ -195,8 +209,8 @@ function serveHtmlResponse(title: string, bodyContent: string, status: number = 
 // --- SECTION 3: CORE HANDLERS ---
 
 /**
- * Download Handler
- * (No UI, no changes)
+ * (MODIFIED) Download Handler
+ * Fixed the Content-Disposition header to correctly handle all filenames.
  */
 async function downloadVideoHandler(req: Request, id: string, key: string): Promise<Response> {
   const record = await kv.get(["links", id]);
@@ -214,8 +228,13 @@ async function downloadVideoHandler(req: Request, id: string, key: string): Prom
   if (!upstreamResponse.ok || !upstreamResponse.body) {
     return new Response("Failed to fetch upstream resource", { status: upstreamResponse.status });
   }
+  
   const responseHeaders = new Headers();
-  responseHeaders.set("Content-Disposition", `attachment; filename="${filename}"`);
+  
+  // (THE FIX) This UTF-8 encoding handles all characters (spaces, Myanmar, etc.)
+  const encodedFilename = encodeURIComponent(filename);
+  responseHeaders.set("Content-Disposition", `attachment; filename*=UTF-8''${encodedFilename}`);
+  
   responseHeaders.set("Content-Type", "application/octet-stream");
   const contentLength = upstreamResponse.headers.get("Content-Length");
   if (contentLength) {
@@ -228,8 +247,8 @@ async function downloadVideoHandler(req: Request, id: string, key: string): Prom
 }
 
 /**
- * Generate Link Handler
- * (MODIFIED to return a styled HTML response)
+ * (MODIFIED) Generate Link Handler
+ * Added a "Copy Link" button and the script to make it work.
  */
 async function generateLinkHandler(req: Request): Promise<Response> {
   const formData = await req.formData();
@@ -275,18 +294,44 @@ async function generateLinkHandler(req: Request): Promise<Response> {
   const bodyContent = `
     <div class="result-box">
       <h3>Your new download link is ready:</h3>
-      <a href="${newLink}" target="_blank">${newLink}</a>
+      <a href="${newLink}" target="_blank" id="generatedLink">${newLink}</a>
       <p>(Clicking this link will start the download)</p>
+      
+      <div class="button-group">
+        <button id="copyBtn" class="button secondary">Copy Link</button>
+      </div>
+      
       <hr>
       <a href="/">Generate another</a> | <a href="/admin">Go to Admin Panel</a>
     </div>
+    
+    <script>
+      const copyBtn = document.getElementById('copyBtn');
+      const generatedLink = document.getElementById('generatedLink');
+      
+      if (copyBtn && generatedLink) {
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(generatedLink.href).then(() => {
+            copyBtn.innerText = 'Copied!';
+            copyBtn.disabled = true;
+            setTimeout(() => {
+              copyBtn.innerText = 'Copy Link';
+              copyBtn.disabled = false;
+            }, 2000);
+          }).catch(err => {
+            console.error('Failed to copy link: ', err);
+            copyBtn.innerText = 'Copy Failed';
+          });
+        });
+      }
+    </script>
   `;
   return serveHtmlResponse("Link Generated", bodyContent);
 }
 
 /**
  * Homepage Handler
- * (MODIFIED to use the new HTML shell)
+ * (Unchanged)
  */
 function homepageHandler(): Response {
   const bodyContent = `
@@ -343,7 +388,7 @@ function homepageHandler(): Response {
 
 /**
  * Admin Page Handler
- * (MODIFIED to use the new HTML shell and styles)
+ * (Unchanged)
  */
 async function adminPageHandler(req: Request): Promise<Response> {
   if (!ADMIN_PASSWORD) {
@@ -365,7 +410,6 @@ async function adminPageHandler(req: Request): Promise<Response> {
     return serveHtmlResponse("Admin Login", bodyContent);
   }
 
-  // If key is correct, show the dashboard
   let linkHtml = "";
   const links = kv.list({ prefix: ["links"] });
   for await (const entry of links) {
@@ -409,7 +453,7 @@ async function adminPageHandler(req: Request): Promise<Response> {
 
 /**
 * Delete Link Handler
-* (No UI, just a redirect)
+* (Unchanged)
 */
 async function deleteLinkHandler(req: Request): Promise<Response> {
   const url = new URL(req.url);
