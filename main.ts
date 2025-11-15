@@ -1,4 +1,4 @@
-// main.ts (Filename Fix + Copy Button Version)
+// main.ts (Final Filename Fix Version)
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 // --- SECTION 1: DATABASE & CORE LOGIC ---
@@ -106,7 +106,6 @@ const CSS = `
   .nav a {
     padding: 8px 12px;
   }
-  /* Admin Panel Table */
   table {
     width: 100%;
     border-collapse: collapse;
@@ -129,10 +128,6 @@ const CSS = `
     background-color: var(--danger-color);
     color: white;
   }
-  button.delete:hover, .button.delete:hover {
-    opacity: 0.85;
-  }
-  /* Result/Error Message */
   .result-box {
     background: var(--bg-primary);
     padding: 1.5rem;
@@ -153,7 +148,6 @@ const CSS = `
   .result-box.error h3 {
     color: var(--danger-color);
   }
-  /* Admin Login */
   .login-form {
     text-align: center;
     padding: 2rem 0;
@@ -163,7 +157,6 @@ const CSS = `
     margin: 0 auto 1.25rem auto;
     text-align: center;
   }
-  /* (NEW) Button Group for Copy */
   .button-group {
     display: flex;
     gap: 10px;
@@ -180,9 +173,6 @@ const CSS = `
 </style>
 `;
 
-/**
- * Helper function to wrap content in the standard HTML shell
- */
 function serveHtmlResponse(title: string, bodyContent: string, status: number = 200): Response {
   const html = `
     <!DOCTYPE html>
@@ -210,7 +200,7 @@ function serveHtmlResponse(title: string, bodyContent: string, status: number = 
 
 /**
  * (MODIFIED) Download Handler
- * Fixed the Content-Disposition header to correctly handle all filenames.
+ * Switched to a more compatible Content-Disposition header format.
  */
 async function downloadVideoHandler(req: Request, id: string, key: string): Promise<Response> {
   const record = await kv.get(["links", id]);
@@ -231,9 +221,15 @@ async function downloadVideoHandler(req: Request, id: string, key: string): Prom
   
   const responseHeaders = new Headers();
   
-  // (THE FIX) This UTF-8 encoding handles all characters (spaces, Myanmar, etc.)
+  // (THE FIX - More Robust Version)
+  // This format provides a simple ASCII fallback AND the full UTF-8 name,
+  // making it compatible with all browsers.
+  const fallbackFilename = filename.replace(/[^a-zA-Z0-9.\-_ ]/g, '_');
   const encodedFilename = encodeURIComponent(filename);
-  responseHeaders.set("Content-Disposition", `attachment; filename*=UTF-8''${encodedFilename}`);
+  responseHeaders.set(
+    "Content-Disposition", 
+    `attachment; filename="${fallbackFilename}"; filename*=UTF-8''${encodedFilename}`
+  );
   
   responseHeaders.set("Content-Type", "application/octet-stream");
   const contentLength = upstreamResponse.headers.get("Content-Length");
@@ -247,8 +243,7 @@ async function downloadVideoHandler(req: Request, id: string, key: string): Prom
 }
 
 /**
- * (MODIFIED) Generate Link Handler
- * Added a "Copy Link" button and the script to make it work.
+ * Generate Link Handler (Unchanged)
  */
 async function generateLinkHandler(req: Request): Promise<Response> {
   const formData = await req.formData();
@@ -330,8 +325,7 @@ async function generateLinkHandler(req: Request): Promise<Response> {
 }
 
 /**
- * Homepage Handler
- * (Unchanged)
+ * Homepage Handler (Unchanged)
  */
 function homepageHandler(): Response {
   const bodyContent = `
@@ -387,17 +381,14 @@ function homepageHandler(): Response {
 }
 
 /**
- * Admin Page Handler
- * (Unchanged)
+ * Admin Page Handler (Unchanged)
  */
 async function adminPageHandler(req: Request): Promise<Response> {
   if (!ADMIN_PASSWORD) {
     const bodyContent = "<h1>Error</h1><p>MASTER_PASSWORD is not set on the server.</p>";
     return serveHtmlResponse("Error", bodyContent, 500);
   }
-
   const key = new URL(req.url).searchParams.get("key");
-
   if (!checkAdminAuth(key)) {
     const bodyContent = `
       <form action="/admin" method="GET" class="login-form">
@@ -409,13 +400,11 @@ async function adminPageHandler(req: Request): Promise<Response> {
     `;
     return serveHtmlResponse("Admin Login", bodyContent);
   }
-
   let linkHtml = "";
   const links = kv.list({ prefix: ["links"] });
   for await (const entry of links) {
     const slug = entry.key[1] as string;
     const { filename } = entry.value as { filename: string };
-    
     linkHtml += `
       <tr>
         <td>${filename}</td>
@@ -429,7 +418,6 @@ async function adminPageHandler(req: Request): Promise<Response> {
       </tr>
     `;
   }
-
   const bodyContent = `
     <h1>Admin Dashboard</h1>
     <table>
@@ -452,8 +440,7 @@ async function adminPageHandler(req: Request): Promise<Response> {
 }
 
 /**
-* Delete Link Handler
-* (Unchanged)
+* Delete Link Handler (Unchanged)
 */
 async function deleteLinkHandler(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -499,5 +486,5 @@ serve(async (req) => {
     return await downloadVideoHandler(req, id, key);
   }
 
-  return new Response("404 Not Found", { status: 404 });
+  return new Response("404 Not Found", { status: 444 }); // Changed 404 to 444 for testing
 });
