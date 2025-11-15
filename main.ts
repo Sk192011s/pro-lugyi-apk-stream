@@ -1,4 +1,4 @@
-// main.ts (Download + Stream Version - FINAL FIX)
+// main.ts (Separate Copy Buttons Version)
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 // --- SECTION 1: DATABASE & CORE LOGIC ---
@@ -78,13 +78,16 @@ const CSS = `
     border-color: var(--accent-color);
     box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
   }
-  button[type="submit"] {
+  button, .button {
     font-size: 16px;
     font-weight: 600;
     padding: 12px 15px;
     cursor: pointer;
     border: none;
     border-radius: 8px;
+    transition: all 0.2s ease;
+  }
+  button[type="submit"] {
     background-color: var(--accent-color);
     color: white;
   }
@@ -140,51 +143,42 @@ function serveHtmlResponse(title: string, bodyContent: string, status: number = 
 // --- SECTION 3: CORE HANDLERS ---
 
 /**
- * Stream Handler
+ * Stream Handler (Unchanged)
  */
 async function streamVideoHandler(req: Request, id: string, key: string): Promise<Response> {
   const record = await kv.get(["links", id]);
   if (!record.value) {
     return new Response("Link not found or expired", { status: 404 });
   }
-
   const { url: originalUrl, key: storedKey } = record.value as { 
     url: string, key: string, filename: string 
   };
-
   if (storedKey !== key) {
     return new Response("Invalid security key", { status: 403 });
   }
-
   const range = req.headers.get("Range");
   const fetchHeaders = new Headers();
   if (range) {
     fetchHeaders.set("Range", range);
   }
-
   console.log(`Streaming (Range: ${range || 'none'}): ${originalUrl}`);
-
   const upstreamResponse = await fetch(originalUrl, {
     headers: fetchHeaders,
   });
-
   if (!upstreamResponse.ok) {
     return new Response("Failed to fetch upstream resource", { status: upstreamResponse.status });
   }
-
   const responseHeaders = new Headers(upstreamResponse.headers);
   responseHeaders.set("Accept-Ranges", "bytes");
   responseHeaders.delete("Content-Disposition");
-
   return new Response(upstreamResponse.body, {
     status: upstreamResponse.status,
     headers: responseHeaders,
   });
 }
 
-
 /**
- * Download Handler
+ * Download Handler (Unchanged)
  */
 async function downloadVideoHandler(req: Request, id: string, key: string): Promise<Response> {
   const record = await kv.get(["links", id]);
@@ -202,7 +196,6 @@ async function downloadVideoHandler(req: Request, id: string, key: string): Prom
   if (!upstreamResponse.ok || !upstreamResponse.body) {
     return new Response("Failed to fetch upstream resource", { status: upstreamResponse.status });
   }
-  
   const responseHeaders = new Headers();
   const fallbackFilename = filename.replace(/[^a-zA-Z0-9.\-_ ]/g, '_');
   const encodedFilename = encodeURIComponent(filename);
@@ -222,7 +215,8 @@ async function downloadVideoHandler(req: Request, id: string, key: string): Prom
 }
 
 /**
- * Generate Link Handler
+ * (MODIFIED) Generate Link Handler
+ * Added a second copy button and the script for it.
  */
 async function generateLinkHandler(req: Request): Promise<Response> {
   const formData = await req.formData();
@@ -293,6 +287,7 @@ async function generateLinkHandler(req: Request): Promise<Response> {
 
       <div class="button-group">
         <button id="copyStreamBtn" class="button secondary">Copy Stream Link</button>
+        <button id="copyDownloadBtn" class="button secondary">Copy Download Link</button>
       </div>
       
       <hr>
@@ -311,13 +306,25 @@ async function generateLinkHandler(req: Request): Promise<Response> {
           }).catch(err => { copyStreamBtn.innerText = 'Copy Failed'; });
         });
       }
+      
+      const copyDownloadBtn = document.getElementById('copyDownloadBtn');
+      const downloadLink = document.getElementById('downloadLink');
+      if (copyDownloadBtn) {
+        copyDownloadBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(downloadLink.href).then(() => {
+            copyDownloadBtn.innerText = 'Copied!';
+            copyDownloadBtn.disabled = true;
+            setTimeout(() => { copyDownloadBtn.innerText = 'Copy Download Link'; copyDownloadBtn.disabled = false; }, 2000);
+          }).catch(err => { copyDownloadBtn.innerText = 'Copy Failed'; });
+        });
+      }
     </script>
   `;
   return serveHtmlResponse("Link Generated", bodyContent);
 }
 
 /**
- * Homepage Handler
+ * Homepage Handler (Unchanged)
  */
 function homepageHandler(): Response {
   const bodyContent = `
@@ -348,7 +355,7 @@ function homepageHandler(): Response {
 }
 
 /**
- * Admin Page Handler
+ * Admin Page Handler (Unchanged)
  */
 async function adminPageHandler(req: Request): Promise<Response> {
   if (!ADMIN_PASSWORD) {
@@ -372,7 +379,7 @@ async function adminPageHandler(req: Request): Promise<Response> {
 }
 
 /**
-* (CORRECTED) Delete Link Handler
+* Delete Link Handler (Unchanged, already fixed)
 */
 async function deleteLinkHandler(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -386,7 +393,6 @@ async function deleteLinkHandler(req: Request): Promise<Response> {
     await kv.delete(["links", id]);
     console.log(`Deleted link with Custom Name (ID): ${id}`);
   }
-  // This line is now correct
   return Response.redirect(url.origin + "/admin?key=" + key, 303);
 }
 
