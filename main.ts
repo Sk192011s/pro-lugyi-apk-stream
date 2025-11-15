@@ -1,4 +1,4 @@
-// main.ts (Auto-detect Extension Version)
+// main.ts (Download + Stream Version)
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 // --- SECTION 1: DATABASE & CORE LOGIC ---
@@ -14,20 +14,16 @@ function checkAdminAuth(key: string | null): boolean {
   return key === ADMIN_PASSWORD;
 }
 
-/**
- * (NEW) Helper function to guess extension from Content-Type
- */
 function mapContentTypeToExtension(contentType: string | null): string {
-  if (!contentType) return ".mp4"; // Default
+  if (!contentType) return ".mp4";
   const type = contentType.split(';')[0].trim();
   switch (type) {
     case "video/mp4": return ".mp4";
     case "video/x-matroska": return ".mkv";
     case "video/webm": return ".webm";
     case "video/quicktime": return ".mov";
-    case "application/octet-stream": return ".bin"; // Generic binary
-    // Add more types if needed
-    default: return ".mp4"; // Default to mp4 for most unknown video types
+    case "application/octet-stream": return ".bin";
+    default: return ".mp4";
   }
 }
 
@@ -62,11 +58,7 @@ const CSS = `
     border-radius: 12px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
   }
-  h1 {
-    color: #ffffff;
-    margin-bottom: 1.5rem;
-    text-align: center;
-  }
+  h1 { color: #ffffff; margin-bottom: 1.5rem; text-align: center; }
   a { color: var(--accent-color); text-decoration: none; }
   a:hover { text-decoration: underline; }
   form { display: flex; flex-direction: column; gap: 1.25rem; }
@@ -106,15 +98,19 @@ const CSS = `
   .result-box h3 { margin-top: 0; }
   .result-box a { font-size: 1.1rem; font-weight: 600; word-break: break-all; }
   .result-box.error { border-color: var(--danger-color); }
-  .login-form { text-align: center; padding: 2rem 0; }
-  .login-form input { width: 80%; margin: 0 auto 1.25rem auto; text-align: center; }
+  .result-box .link-box {
+    background-color: var(--bg-tertiary);
+    padding: 10px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+  }
+  .result-box .link-box label {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+  }
+  small { color: var(--text-secondary); margin-top: -10px; }
   .button-group { display: flex; gap: 10px; margin-top: 1rem; }
   .button.secondary { background-color: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); }
-  /* (NEW) Optional field description */
-  small {
-    color: var(--text-secondary);
-    margin-top: -10px;
-  }
 </style>
 `;
 
@@ -144,7 +140,56 @@ function serveHtmlResponse(title: string, bodyContent: string, status: number = 
 // --- SECTION 3: CORE HANDLERS ---
 
 /**
+ * (NEW) Stream Handler
+ * This supports Range requests for video players (APKs).
+ */
+async function streamVideoHandler(req: Request, id: string, key: string): Promise<Response> {
+  const record = await kv.get(["links", id]);
+  if (!record.value) {
+    return new Response("Link not found or expired", { status: 404 });
+  }
+
+  const { url: originalUrl, key: storedKey } = record.value as { 
+    url: string, key: string, filename: string 
+  };
+
+  if (storedKey !== key) {
+    return new Response("Invalid security key", { status: 403 });
+  }
+
+  // Check for Range header from the video player
+  const range = req.headers.get("Range");
+  const fetchHeaders = new Headers();
+  if (range) {
+    fetchHeaders.set("Range", range);
+  }
+
+  console.log(`Streaming (Range: ${range || 'none'}): ${originalUrl}`);
+
+  // Fetch from the original source (Mediafire, etc.)
+  const upstreamResponse = await fetch(originalUrl, {
+    headers: fetchHeaders,
+  });
+
+  if (!upstreamResponse.ok) {
+    return new Response("Failed to fetch upstream resource", { status: upstreamResponse.status });
+  }
+
+  // Pass back the response, including 206 Partial Content status
+  const responseHeaders = new Headers(upstreamResponse.headers);
+  responseHeaders.set("Accept-Ranges", "bytes"); // Ensure player knows we support seeking
+  responseHeaders.delete("Content-Disposition"); // We don't want to force download
+
+  return new Response(upstreamResponse.body, {
+    status: upstreamResponse.status, // This will be 206 (Partial Content) if seeking
+    headers: responseHeaders,
+  });
+}
+
+
+/**
  * Download Handler (Unchanged)
+ * This forces download with Content-Disposition.
  */
 async function downloadVideoHandler(req: Request, id: string, key: string): Promise<Response> {
   const record = await kv.get(["links", id]);
@@ -183,16 +228,15 @@ async function downloadVideoHandler(req: Request, id: string, key: string): Prom
 
 /**
  * (MODIFIED) Generate Link Handler
- * Auto-detects filename if left blank.
+ * Now shows BOTH links (Stream and Download).
  */
 async function generateLinkHandler(req: Request): Promise<Response> {
   const formData = await req.formData();
   const url = formData.get("url") as string;
   const key = formData.get("key") as string;
   const custom_id = formData.get("custom_id") as string;
-  let filename_override = (formData.get("filename") as string)?.trim(); // Optional
+  let filename_override = (formData.get("filename") as string)?.trim();
 
-  // 1. Clean the custom_id (slug)
   const slug = custom_id.trim()
                        .toLowerCase()
                        .replace(/[^a-z0-9\s-]/g, '-')
@@ -201,71 +245,60 @@ async function generateLinkHandler(req: Request): Promise<Response> {
                        .replace(/^-+|-+$/g, '');
 
   if (!url || !key || !slug) {
-    const bodyContent = `
-      <div class="result-box error">
-        <h3>Error</h3>
-        <p>Invalid URL, Key, or Custom Link Name provided.</p>
-        <hr>
-        <a href="/">Go Back</a>
-      </div>
-    `;
+    const bodyContent = `<div class="result-box error"><h3>Error</h3><p>Invalid URL, Key, or Custom Link Name provided.</p><hr><a href="/">Go Back</a></div>`;
     return serveHtmlResponse("Error", bodyContent, 400);
   }
 
-  // 2. Check if slug is already taken
   const existing = await kv.get(["links", slug]);
   if (existing.value) {
-    const bodyContent = `
-      <div class="result-box error">
-        <h3>Error: Link Name Taken</h3>
-        <p>The custom link name '<strong>${slug}</strong>' is already in use.</p>
-        <p>Please go back and choose a different name.</p>
-        <hr>
-        <a href="/">Go Back</a>
-      </div>
-    `;
+    const bodyContent = `<div class="result-box error"><h3>Error: Link Name Taken</h3><p>The custom link name '<strong>${slug}</strong>' is already in use.</p><hr><a href="/">Go Back</a></div>`;
     return serveHtmlResponse("Link Name Taken", bodyContent, 409);
   }
   
-  // 3. Determine the final filename
   let finalFilename = "";
   if (filename_override) {
-    // User provided a specific name. Use it.
     finalFilename = filename_override;
   } else {
-    // User left it blank. Auto-detect from .txt link.
     try {
       console.log("Auto-detecting filename for:", url);
-      // Use HEAD request to only get headers, not the full file
       const response = await fetch(url, { method: "HEAD" });
       const contentType = response.headers.get("Content-Type");
       const extension = mapContentTypeToExtension(contentType);
-      finalFilename = `${slug}${extension}`; // e.g., "dass-808.mp4"
+      finalFilename = `${slug}${extension}`;
       console.log(`Detected Content-Type: ${contentType}, Assigned Filename: ${finalFilename}`);
     } catch (e) {
       console.error("HEAD request failed:", e.message);
-      // Fallback: If HEAD fails (e.g., server doesn't allow it), just default to .mp4
       finalFilename = `${slug}.mp4`;
     }
   }
 
-  // 4. Save to KV
   await kv.set(["links", slug], { 
     url: url, 
     key: key,
-    filename: finalFilename // The final correct filename
+    filename: finalFilename
   });
 
-  const newLink = `${new URL(req.url).origin}/download/${slug}?key=${key}`;
+  const baseUrl = new URL(req.url).origin;
+  const streamLink = `${baseUrl}/stream/${slug}?key=${key}`;
+  const downloadLink = `${baseUrl}/download/${slug}?key=${key}`;
   
   const bodyContent = `
     <div class="result-box">
-      <h3>Your new download link is ready:</h3>
-      <a href="${newLink}" target="_blank" id="generatedLink">${newLink}</a>
+      <h3>Links Generated!</h3>
       <p>(Will download as: <strong>${finalFilename}</strong>)</p>
       
+      <div class="link-box">
+        <label for="streamLink">▶️ For APK / Video Player:</label>
+        <a href="${streamLink}" target="_blank" id="streamLink">${streamLink}</a>
+      </div>
+
+      <div class="link-box">
+        <label for="downloadLink">⬇️ For Direct Download:</label>
+        <a href="${downloadLink}" id="downloadLink">${downloadLink}</a>
+      </div>
+
       <div class="button-group">
-        <button id="copyBtn" class="button secondary">Copy Link</button>
+        <button id="copyStreamBtn" class="button secondary">Copy Stream Link</button>
       </div>
       
       <hr>
@@ -273,15 +306,15 @@ async function generateLinkHandler(req: Request): Promise<Response> {
     </div>
     
     <script>
-      const copyBtn = document.getElementById('copyBtn');
-      const generatedLink = document.getElementById('generatedLink');
-      if (copyBtn) {
-        copyBtn.addEventListener('click', () => {
-          navigator.clipboard.writeText(generatedLink.href).then(() => {
-            copyBtn.innerText = 'Copied!';
-            copyBtn.disabled = true;
-            setTimeout(() => { copyBtn.innerText = 'Copy Link'; copyBtn.disabled = false; }, 2000);
-          }).catch(err => { copyBtn.innerText = 'Copy Failed'; });
+      const copyStreamBtn = document.getElementById('copyStreamBtn');
+      const streamLink = document.getElementById('streamLink');
+      if (copyStreamBtn) {
+        copyStreamBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(streamLink.href).then(() => {
+            copyStreamBtn.innerText = 'Copied!';
+            copyStreamBtn.disabled = true;
+            setTimeout(() => { copyStreamBtn.innerText = 'Copy Stream Link'; copyStreamBtn.disabled = false; }, 2000);
+          }).catch(err => { copyStreamBtn.innerText = 'Copy Failed'; });
         });
       }
     </script>
@@ -290,8 +323,7 @@ async function generateLinkHandler(req: Request): Promise<Response> {
 }
 
 /**
- * (MODIFIED) Homepage Handler
- * "Filename" is now optional.
+ * Homepage Handler (Unchanged from last time)
  */
 function homepageHandler(): Response {
   const bodyContent = `
@@ -331,14 +363,7 @@ async function adminPageHandler(req: Request): Promise<Response> {
   }
   const key = new URL(req.url).searchParams.get("key");
   if (!checkAdminAuth(key)) {
-    const bodyContent = `
-      <form action="/admin" method="GET" class="login-form">
-        <h1>Admin Panel</h1>
-        <label for="key">Enter Master Password:</label>
-        <input type="password" name="key" id="key" required>
-        <button type="submit">Login</button>
-      </form>
-    `;
+    const bodyContent = `<form action="/admin" method="GET" class="login-form"><h1>Admin Panel</h1><label for="key">Enter Master Password:</label><input type="password" name="key" id="key" required><button type="submit">Login</button></form>`;
     return serveHtmlResponse("Admin Login", bodyContent);
   }
   let linkHtml = "";
@@ -346,37 +371,9 @@ async function adminPageHandler(req: Request): Promise<Response> {
   for await (const entry of links) {
     const slug = entry.key[1] as string;
     const { filename } = entry.value as { filename: string };
-    linkHtml += `
-      <tr>
-        <td>${filename}</td>
-        <td><strong>${slug}</strong></td>
-        <td>
-          <form action="/delete?key=${ADMIN_PASSWORD}" method="POST" onsubmit="return confirm('Are you sure?');">
-            <input type="hidden" name="id" value="${slug}">
-            <button type="submit" class="delete">Delete</button>
-          </form>
-        </td>
-      </tr>
-    `;
+    linkHtml += `<tr><td>${filename}</td><td><strong>${slug}</strong></td><td><form action="/delete?key=${ADMIN_PASSWORD}" method="POST" onsubmit="return confirm('Are you sure?');"><input type="hidden" name="id" value="${slug}"><button type="submit" class="delete">Delete</button></form></td></tr>`;
   }
-  const bodyContent = `
-    <h1>Admin Dashboard</h1>
-    <table>
-      <thead>
-        <tr>
-          <th>Filename</th>
-          <th>Custom Link Name (ID)</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${linkHtml || '<tr><td colspan="3" style="text-align: center;">No links generated yet.</td></tr>'}
-      </tbody>
-    </table>
-    <div class="nav">
-      <a href="/">Go back to Generator</a>
-    </div>
-  `;
+  const bodyContent = `<h1>Admin Dashboard</h1><table><thead><tr><th>Filename</th><th>Custom Link Name (ID)</th><th>Action</th></tr></thead><tbody>${linkHtml || '<tr><td colspan="3" style="text-align: center;">No links generated yet.</td></tr>'}</tbody></table><div class="nav"><a href="/">Go back to Generator</a></div>`;
   return serveHtmlResponse("Admin Dashboard", bodyContent);
 }
 
@@ -395,7 +392,7 @@ async function deleteLinkHandler(req: Request): Promise<Response> {
     await kv.delete(["links", id]);
     console.log(`Deleted link with Custom Name (ID): ${id}`);
   }
-  return Response.redirect(url.origin + "/admin?key=" + key, 303);
+  return Response.redirect(url.origin + "/admin?key="key, 303);
 }
 
 
@@ -403,8 +400,10 @@ async function deleteLinkHandler(req: Request): Promise<Response> {
 
 serve(async (req) => {
   const url = new URL(req.url);
-  const pattern = new URLPattern({ pathname: "/download/:id" });
-  const downloadMatch = pattern.exec(url);
+  const downloadPattern = new URLPattern({ pathname: "/download/:id" });
+  const streamPattern = new URLPattern({ pathname: "/stream/:id" });
+  const downloadMatch = downloadPattern.exec(url);
+  const streamMatch = streamPattern.exec(url);
 
   if (url.pathname === "/" && req.method === "GET") {
     return homepageHandler();
@@ -418,6 +417,18 @@ serve(async (req) => {
   if (url.pathname === "/delete" && req.method === "POST") {
     return await deleteLinkHandler(req);
   }
+
+  // (NEW) Route for /stream
+  if (streamMatch && req.method === "GET") {
+    const id = streamMatch.pathname.groups.id;
+    const key = url.searchParams.get("key");
+    if (!key) {
+      return new Response("Missing 'key' parameter", { status: 401 });
+    }
+    return await streamVideoHandler(req, id, key);
+  }
+
+  // (EXISTING) Route for /download
   if (downloadMatch && req.method === "GET") {
     const id = downloadMatch.pathname.groups.id;
     const key = url.searchParams.get("key");
