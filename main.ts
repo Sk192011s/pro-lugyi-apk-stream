@@ -1,4 +1,4 @@
-// main.ts (Download + Stream Version)
+// main.ts (Download + Stream Version - FINAL FIX)
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 // --- SECTION 1: DATABASE & CORE LOGIC ---
@@ -140,8 +140,7 @@ function serveHtmlResponse(title: string, bodyContent: string, status: number = 
 // --- SECTION 3: CORE HANDLERS ---
 
 /**
- * (NEW) Stream Handler
- * This supports Range requests for video players (APKs).
+ * Stream Handler
  */
 async function streamVideoHandler(req: Request, id: string, key: string): Promise<Response> {
   const record = await kv.get(["links", id]);
@@ -157,7 +156,6 @@ async function streamVideoHandler(req: Request, id: string, key: string): Promis
     return new Response("Invalid security key", { status: 403 });
   }
 
-  // Check for Range header from the video player
   const range = req.headers.get("Range");
   const fetchHeaders = new Headers();
   if (range) {
@@ -166,7 +164,6 @@ async function streamVideoHandler(req: Request, id: string, key: string): Promis
 
   console.log(`Streaming (Range: ${range || 'none'}): ${originalUrl}`);
 
-  // Fetch from the original source (Mediafire, etc.)
   const upstreamResponse = await fetch(originalUrl, {
     headers: fetchHeaders,
   });
@@ -175,21 +172,19 @@ async function streamVideoHandler(req: Request, id: string, key: string): Promis
     return new Response("Failed to fetch upstream resource", { status: upstreamResponse.status });
   }
 
-  // Pass back the response, including 206 Partial Content status
   const responseHeaders = new Headers(upstreamResponse.headers);
-  responseHeaders.set("Accept-Ranges", "bytes"); // Ensure player knows we support seeking
-  responseHeaders.delete("Content-Disposition"); // We don't want to force download
+  responseHeaders.set("Accept-Ranges", "bytes");
+  responseHeaders.delete("Content-Disposition");
 
   return new Response(upstreamResponse.body, {
-    status: upstreamResponse.status, // This will be 206 (Partial Content) if seeking
+    status: upstreamResponse.status,
     headers: responseHeaders,
   });
 }
 
 
 /**
- * Download Handler (Unchanged)
- * This forces download with Content-Disposition.
+ * Download Handler
  */
 async function downloadVideoHandler(req: Request, id: string, key: string): Promise<Response> {
   const record = await kv.get(["links", id]);
@@ -227,8 +222,7 @@ async function downloadVideoHandler(req: Request, id: string, key: string): Prom
 }
 
 /**
- * (MODIFIED) Generate Link Handler
- * Now shows BOTH links (Stream and Download).
+ * Generate Link Handler
  */
 async function generateLinkHandler(req: Request): Promise<Response> {
   const formData = await req.formData();
@@ -323,7 +317,7 @@ async function generateLinkHandler(req: Request): Promise<Response> {
 }
 
 /**
- * Homepage Handler (Unchanged from last time)
+ * Homepage Handler
  */
 function homepageHandler(): Response {
   const bodyContent = `
@@ -354,7 +348,7 @@ function homepageHandler(): Response {
 }
 
 /**
- * Admin Page Handler (Unchanged)
+ * Admin Page Handler
  */
 async function adminPageHandler(req: Request): Promise<Response> {
   if (!ADMIN_PASSWORD) {
@@ -378,7 +372,7 @@ async function adminPageHandler(req: Request): Promise<Response> {
 }
 
 /**
-* Delete Link Handler (Unchanged)
+* (CORRECTED) Delete Link Handler
 */
 async function deleteLinkHandler(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -392,7 +386,8 @@ async function deleteLinkHandler(req: Request): Promise<Response> {
     await kv.delete(["links", id]);
     console.log(`Deleted link with Custom Name (ID): ${id}`);
   }
-  return Response.redirect(url.origin + "/admin?key="key, 303);
+  // This line is now correct
+  return Response.redirect(url.origin + "/admin?key=" + key, 303);
 }
 
 
@@ -418,7 +413,7 @@ serve(async (req) => {
     return await deleteLinkHandler(req);
   }
 
-  // (NEW) Route for /stream
+  // Route for /stream
   if (streamMatch && req.method === "GET") {
     const id = streamMatch.pathname.groups.id;
     const key = url.searchParams.get("key");
@@ -428,7 +423,7 @@ serve(async (req) => {
     return await streamVideoHandler(req, id, key);
   }
 
-  // (EXISTING) Route for /download
+  // Route for /download
   if (downloadMatch && req.method === "GET") {
     const id = downloadMatch.pathname.groups.id;
     const key = url.searchParams.get("key");
